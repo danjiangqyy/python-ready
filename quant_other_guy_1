@@ -1,0 +1,443 @@
+#trading_bot
+
+
+
+# !/usr/bin/env python
+# coding:utf-8
+
+import grpc
+import time
+import random
+import logging
+import numpy as np
+import warnings
+
+import question_pb2_grpc, question_pb2
+import contest_pb2_grpc, contest_pb2
+
+
+from factors_calculation import FactorManager
+
+warnings.filterwarnings('ignore')
+
+# CONTEST_HOST = 'localhost'
+# CONTEST_PORT = '6060'
+# QUESTION_HOST = "localhost"
+# QUESTION_PORT = "6061"
+# USER_ID = 13
+# USER_PIN = "12345"
+
+CONTEST_HOST = '101.52.254.180'
+CONTEST_PORT = '56702'
+
+QUESTION_HOST = "101.52.254.180"
+QUESTION_PORT = "56701"
+
+USER_ID = 56
+USER_PIN = "mTNyDfyu"
+
+
+start_time = time.time()
+
+
+class TradingClient(object):
+
+    def __init__(self):
+        self.session_key = str(-1)
+        self.success = False
+        self.sequence = 0
+        self.sequence_next = 0
+        self.client_contest = None
+        self.client_question = None
+        self.client_list = list()
+        self.init_capital = 0.0
+        self.avail_capital = 0.0
+        self.total_capital = 0.0
+        self.asset_capital = 0.0
+        self.current_data = None
+        self.current_positions = None
+        self.current_positions_real = None
+        self.positions = None
+        self.send_positions = None
+        self.answer_request = None
+        self.stock_length = 482
+        self.first_question = True
+        self.log = self.log()
+        self.flag = True
+        self.long_capital = 0
+        self.short_capital = 0
+        self.short_stk_ls, self.long_stk_ls = list(), list()
+        self.scores_rank = np.zeros(482)
+        self.fm = FactorManager()
+        # 用于记录 FactorManager 中的 ArrayManager 共存储了多少条数据
+        self.bar_count = 0
+        self.has_next_question = False
+
+    def log(self):
+        logger = logging.getLogger('log')
+        logger.setLevel(logging.DEBUG)
+        fh = logging.FileHandler(r'C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\log_info_trading_bot.log')
+        fh.setLevel(logging.DEBUG)
+        # ch = logging.StreamHandler()
+        # ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+        fh.setFormatter(formatter)
+        # ch.setFormatter(formatter)
+        logger.addHandler(fh)
+        # logger.addHandler(ch)
+        return logger
+
+    def init(self):
+        conn = grpc.insecure_channel(CONTEST_HOST + ':' + CONTEST_PORT)
+        self.client_contest = contest_pb2_grpc.ContestStub(channel=conn)
+        self.client_list.append(self.client_contest)
+
+        conn = grpc.insecure_channel(QUESTION_HOST + ':' + QUESTION_PORT)
+        self.client_question = question_pb2_grpc.QuestionStub(channel=conn)
+        self.client_list.append(self.client_question)
+
+        self.log.info("init>>服务器连接成功:")
+        self.login()
+
+    def login(self):
+        # 登录接口: 输入账号和密码登录，获取session_key, init_capital, success
+        # response = self.client_contest(contest_pb2.LoginRequest(user_id=USER_ID, user_pin=USER_PIN))
+        login_request = contest_pb2.LoginRequest(user_id=USER_ID, user_pin=USER_PIN)
+        response = self.client_contest.login(login_request)
+        # 此处有无必要性？
+        # time.sleep(0.1)
+        if response.success:
+            self.log.info("login>>登录成功: ")
+            self.session_key = response.session_key
+            self.success = response.success
+            self.init_capital = response.init_capital
+            self.current_data = self.question()
+            self.avail_capital = self.current_data.capital
+            self.sequence = self.current_data.sequence
+            self.sequence_next = self.sequence + 1
+            # print("login>>更新第 1 个bar")
+            self.update_bar()
+
+        else:
+            self.log.info("login>>登录失败: %s" % response.reason)
+            return
+
+    def question(self):
+        # 如果是第一次查询, 需要计算出股票序列有多长
+        if self.first_question:
+            question_request = question_pb2.QuestionRequest(user_id=USER_ID, sequence=self.sequence_next)
+            response = self.client_question.get_question(question_request)
+            self.current_data = response
+            self.avail_capital = self.current_data.capital
+            self.get_positions_info(out=True)
+            self.total_capital = self.asset_capital + self.avail_capital
+            stock_list = self.current_data.dailystk
+            self.stock_length = len(stock_list)
+            col_size = len(stock_list[0].values)
+            self.log.info("question>>当前共有 %d 只股票供交易:, col_size=%s" % (self.stock_length, col_size))
+            self.first_question = False
+
+        else:
+            question_request = question_pb2.QuestionRequest(user_id=USER_ID, sequence=self.sequence)
+            response = self.client_question.get_question(question_request)
+
+        return response
+
+    def get_positions_info(self, out=False):
+        # 返回的key是股票代码从 1 开始到 482, value是对应的发出仓位大小
+        pos_dict = dict()
+        close_price = self.fm.am.close[:, self.sequence+60-1]
+
+        if not out:
+            for i, pos in enumerate(self.answer_request.positions):
+                if pos != 0:
+                    pos_dict[i] = pos
+                else:
+                    continue
+        elif out:
+            self.asset_capital = 0
+            for i, pos in enumerate(self.current_data.positions):
+                if pos != 0:
+                    pos_dict[i] = pos
+                    self.asset_capital += abs(pos) * close_price[i]
+                else:
+                    continue
+        self.current_positions_real = pos_dict
+        return pos_dict
+
+    def answer(self):
+        # 提交答案接口: 编号sequence字段, 数组position是提交的各只票的仓位情况
+        # 返回值: 布尔 accepted, 和 string reason
+        response = self.client_contest.submit_answer(self.answer_request)
+        return response
+
+    """
+        模型主体部分：选股, 确定各股票仓位, 
+        风险控制及相应的仓位调整, 
+        将生成的仓单发送给服务器
+    """
+    def stock_selection(self):
+
+        """第一步: 先计算多个因子, 并进行回归计算排名打分"""
+        # # 动量因子
+        # score_return_4d = self.fm.ret_nd(20)
+        #
+        # # 波动率因子, std_nd(N 日收益率的波动率)
+        # score_std_20d = np.zeros(self.stock_length)
+        # if self.bar_count >= 20:
+        #     # 波动率因子 最近20天(约一个月)收益率的标准差(波动率因子, std_20d)
+        #     score_std_20d = self.fm.std_nd(20)
+
+        # alpha034因子
+        # alpha034因子
+        # score_alpha034 = self.fm.factor034[:, self.sequence+60-1]
+        # alpha035因子
+        # score_alpha035 = self.fm.factor035[:, self.sequence+60-1]
+        # std_Nd因子
+        score_factor_ret_Nnum = self.fm.factor_ret_Nnum[:, self.sequence+60-1]
+        # alpha002因子
+        score_alpha002 = self.fm.factor002[:, self.sequence+60-1]
+        # alpha003因子
+        score_alpha003 = self.fm.factor003[:, self.sequence+60-1]
+        # alpha006因子
+        score_alpha006 = self.fm.factor006[:, self.sequence+60-1]
+        # alpha008因子
+        score_alpha008 = self.fm.factor008[:, self.sequence+60-1]
+        # alpha009因子
+        score_alpha009 = self.fm.factor009[:, self.sequence+60-1]
+        # alpha010因子
+        score_alpha010 = self.fm.factor010[:, self.sequence+60-1]
+        # alpha012因子
+        score_alpha012 = self.fm.factor012[:, self.sequence+60-1]
+
+        # 计算因子预测收益率
+        forcast_ret = (self.fm.factor_ret_Nnum_f[self.sequence+60-2] * score_factor_ret_Nnum +
+                       self.fm.factor002_f[self.sequence+60-2] * score_alpha002 +
+                       self.fm.factor003_f[self.sequence+60-2] * score_alpha003 +
+                       self.fm.factor006_f[self.sequence+60-2] * score_alpha006 +
+                       self.fm.factor008_f[self.sequence+60-2] * score_alpha008 +
+                       self.fm.factor009_f[self.sequence+60-2] * score_alpha009 +
+                       self.fm.factor010_f[self.sequence+60-2] * score_alpha010 +
+                       self.fm.factor012_f[self.sequence+60-2] * score_alpha012)
+
+        """
+            第二步: 多个因子的打分进行加总, 所有股票排名
+        """
+        # 将总分从小到大排列,
+        # scores_rank 记录的是从小到大排列后对应的股票代码(也就是从0开始的index)
+        self.scores_rank = np.argsort(forcast_ret)
+
+        """
+            第三步: 选出需要做多或者做空的股票，排除停牌（无交易量的股票）
+            先各选出三十只非停牌股票供机动使用，
+            后续 risk_management 部分再筛选掉其中十只
+        """
+        # 当前行情数据中的(最新的)成交量
+        list_volume_data = self.fm.am.volume[:, self.sequence+60-1]
+        count = 0
+        self.short_stk_ls.clear()
+        self.long_stk_ls.clear()
+        for index in self.scores_rank:
+            if list_volume_data[index] > 500:
+                self.short_stk_ls.append(index)
+                count += 1
+            # 选够30只退出循环
+            if count >= 20:
+                break
+        count = 0
+        index = -1
+        for _ in range(100):
+            if list_volume_data[self.scores_rank[index]] > 500:
+                self.long_stk_ls.append(self.scores_rank[index])
+                count += 1
+            if count >= 20:
+                break
+            index -= 1
+
+    # 计算仓位, 生成完整的，可供服务器接收的answer_request
+    def calculate_positions(self):
+        """确定各个股票仓位的逻辑"""
+        self.answer_request = contest_pb2.AnswerRequest()
+        self.answer_request.user_id = USER_ID
+        self.answer_request.user_pin = USER_PIN
+        self.answer_request.session_key = self.session_key
+        # 当下 5 秒内模型, 则用当前的 sequence 提交
+        self.answer_request.sequence = self.sequence
+        positions = self.answer_request.positions
+
+        long_capital = self.avail_capital * 0.5
+        short_capital = self.avail_capital * 0.5
+        long_capital_each = long_capital / 20
+        short_capital_each = short_capital / 20
+        close_price = self.fm.am.close[:, self.sequence+60-1]
+
+        for i in range(self.stock_length):
+            # 做空前二十只票
+            if i in self.short_stk_ls:
+                temp_price = close_price[i]
+                temp_pos = int(short_capital_each / temp_price)
+                positions.append(temp_pos)
+            # 做多后二十只票
+            elif i in self.long_stk_ls:
+                temp_price = close_price[i]
+                temp_pos = int(long_capital_each / temp_price)
+                positions.append(-temp_pos)
+            else:
+                positions.append(0)
+        self.current_positions = self.get_positions_info()
+
+    def risk_management(self):
+        """
+            # 风险管理模块, 本地先行计算一下, 检查仓位是否满足要求（净暴露！）, 资金是否充足
+            # 股票是否停牌, 是否涨跌停也需要考虑到（交易量大于零但小于某个值的不不交易）
+            # 并在内部根据具体风险项目1,2,3等对self.send_positions进行调整
+            # 使得self.send_positions满足要求
+        """
+        # 对该 positions 列表进行系列处理
+        positions = self.answer_request.positions
+        pos_info = self.get_positions_info()
+
+    def update_bar(self):
+        self.bar_count += 1
+        ls = list()
+        for each in self.current_data.dailystk:
+            temp = each.values  # temp为[7 个数据]，里面保存double类型数据
+            ls.append(temp)
+        self.fm.am.update_bar(np.array(ls), self.sequence)
+
+    def rock_and_roll(self):
+        self.init()
+
+        time_counts = 0
+
+        while time_counts < 3:
+
+            if self.success:
+                try:
+                    self.log.info("rock & roll>>开始交易:")
+                    # 定义两个 "定时器", 确定横截面换仓周期
+                    scheduler_start, scheduler_end = 0, 0
+                    new_round = True
+                    count = 1
+                    while True:
+                        """
+                        此处可以进行建模计算, 选股, 定仓位, 下单
+                        """
+                        # 设置调仓周期 五天
+                        if new_round:
+                            scheduler_start, scheduler_end = self.sequence, self.sequence
+                            new_round = False
+                            self.log.info("当前持仓情况为: %s" % self.current_positions_real)
+                            self.log.info("当前账户可用资金为: %s, 持有股票资产价值为: %s" % (self.avail_capital, self.asset_capital))
+                            self.log.info("总资产: %s" % self.total_capital)
+                            print("=" * 100)
+
+                        # 调仓周期为五天(第四天发出仓位请求, 第五天服务器撮合成交)
+                        if (scheduler_end - scheduler_start) <= 3:
+                            self.current_data = self.question()
+                            # 等待0.02秒远程通信延时的必要性, 异步堵塞
+                            # time.sleep(0.02)
+                            if self.current_data == -1:
+                                time.sleep(random.uniform(0.08, 0.13))
+                                continue
+                            self.sequence = self.current_data.sequence
+                            self.sequence_next = self.sequence + 1
+                            self.has_next_question = self.current_data.has_next_question
+                            if scheduler_end != self.sequence:
+                                self.avail_capital = self.current_data.capital
+                                count += 1
+                                # self.log.info("rock_and_roll>>更新第 %d 个bar" % count)
+                                self.update_bar()
+                                scheduler_end = self.sequence
+                        else:
+                            # 根据最新的数据计算因子, 59之前是预存数据，60开始新数据进入
+                            self.fm.update_factor(self.sequence+60)
+                            self.get_positions_info(out=True)
+                            self.total_capital = self.avail_capital + self.asset_capital
+                            # 建模计算需要发出的仓位情况
+                            self.stock_selection()
+                            self.calculate_positions()
+                            # 风险管理模块, 本地检查仓位是否满足要求, 资金是否充足等
+                            # 并在内部根据具体风险项目1,2,3等对self.send_positions进行调整
+                            # 使得self.send_positions满足要求
+                            self.risk_management()
+                            answer_status = self.answer()
+                            if answer_status.accepted:
+                                # 选择性打印出发送的股票代码和仓位, 无仓位的股票不打印
+                                self.log.info("订单提交成功, 提交股票仓位情况: %s" % self.current_positions)
+
+                            else:
+                                # 发单失败, 尝试做出仓单调整再发出
+                                start_time_stamp = time.time()
+                                self.flag = True
+                                # 根据报错原因进行后续处理, 返回结果继续记录在answer_status中, 直到此次发单成功
+                                # 或者时间超过3.8秒仍然未发出, 则跳出该循环
+                                while self.flag:
+                                    self.log.info("订单提交失败, 报错原因: %s", answer_status.reason)
+                                    if answer_status.reason == "exceed max exposure":
+                                        """重新设计仓位"""
+                                        pass
+                                    elif answer_status.reason == "not enough money":
+                                        """按比例减小总仓位"""
+                                        pass
+                                    elif answer_status.reason == "exceed single stock position limit":
+                                        """选股数量不够, 增加股票多空个数"""
+                                        pass
+                                    elif "timeout" in answer_status.reason.split():
+                                        """申报日期出错"""
+                                        temp_response = self.question()
+                                        self.answer_request.sequence = temp_response.sequence()
+                                        self.answer()
+                                        pass
+                                    else:
+                                        print("rock_and_roll>>未知的订单提交错误, 请另外详细排查原因: %s" %answer_status.reason)
+                                    if answer_status.accepted or (time.time() - start_time_stamp > 3.8):
+                                        self.flag = False
+                                        if not answer_status.accepted:
+                                            self.log.info("rock_and_roll>>订单发送报错, 反复发单仍失败, 超过3.8秒, 放弃此轮交易")
+                                    time.sleep(random.uniform(0.8, 1.3))
+                                self.flag = True
+
+                            new_round = True
+
+                        time.sleep(random.uniform(0.8, 1.3))
+
+                except KeyboardInterrupt:
+                    # [client.stop(0) for client in self.client_list]
+                    print("rock_and_roll>>代码手动中止:")
+                    break
+
+                # 若程序因异常、或者人为中止, 则强行平掉所有仓位
+                finally:
+                    answer_request = contest_pb2.AnswerRequest()
+                    answer_request.user_id = USER_ID
+                    answer_request.user_pin = USER_PIN
+                    answer_request.session_key = self.session_key
+                    answer_request.sequence = self.sequence
+                    positions = answer_request.positions
+                    for _ in range(self.stock_length):
+                        positions.append(0)
+                    response = self.client_contest.submit_answer(answer_request)
+                    if response.accepted:
+                        self.log.info("finally>>程序中止, 成功强平掉所有仓位.")
+                    else:
+                        self.log.info("finally>>程序中止, 强平仓位失败, 原因是: %s" % response.reason)
+                    print("rock_and_roll>> 共运行 %s 秒", time.time() - start_time)
+                    # return
+            else:
+                time_counts += 1
+                self.log.info("rock_and_roll>> 交易还未开始或登录失败%d次, 再尝试重新连接一次(会尝试三次)", time_counts)
+                time.sleep(0.2)
+                # 再次尝试发送登录请求
+                self.login()
+        self.log.info("rock_and_roll>> 连续三次连接失败，程序中止")
+        return
+
+
+if __name__ == '__main__':
+    print("main>> 程序开始: ")
+
+    trading_client = TradingClient()
+    trading_client.rock_and_roll()
+
+    print("main>> 共耗时：", time.time() - start_time)
