@@ -1,0 +1,350 @@
+import grpc
+import time
+import random as rd
+import numpy as np
+from base1 import contest_pb2, contest_pb2_grpc
+from base1 import question_pb2, question_pb2_grpc
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pandas.core.frame import DataFrame
+import random as rd
+import time
+
+
+_HOST = '101.52.254.180'
+_PORT = '56702'
+address = '101.52.254.180'
+port = '56701'
+
+#class Contest(contest_pb2_grpc.ContestServicer):
+    # 重写接口函数
+   # def login(self, request, context):
+       # str = request.session_key
+        #return contest_pb2.UserLoginResponse(session_key=str.upper())
+def run_login():
+    conn1 = grpc.insecure_channel(_HOST + ':' + _PORT)  # 监听频道
+    client = contest_pb2_grpc.ContestStub(channel=conn1)  # 客户端使用Stub类发送请求,参数为频道,为了绑定链接
+    IDPIN = client.login(contest_pb2.LoginRequest(user_id = 78,user_pin='IzMTATlK'))
+    print(IDPIN)
+
+def get_data():
+
+
+
+    #接受数据频道
+
+    conn1 = grpc.insecure_channel(address+ ':' +port)  # 监听频道
+    client = question_pb2_grpc.QuestionStub(channel=conn1)  # 客户端使用Stub类发送请求,参数为频道,为了绑定链接
+    search = client.get_question(question_pb2.QuestionRequest(user_id = 78, sequence=0))
+
+    #打印 目前资产
+
+    print("资产:",search.capital)
+    #print("股票详情：",search.dailystk)
+    #print(search.dailystk.keys())
+
+    #获得最新数据  并且转化为 list
+
+    double=search.dailystk
+    list_cangwei = search.positions
+    #print("double:",double)
+    double_old=[]
+    #print(double)
+    #for i in double:
+        #c=float(i)
+       # d#ouble_old.append(c)
+
+    #print(double_old)
+
+    #list_stock=double.tolist()
+    #print("list?:",list_stock)
+
+
+
+
+    list_stock2=[]
+
+    list_stock2.append(search.dailystk)
+
+
+    #print(list)
+    myarray = np.array(list_stock2)  # 列表转数组
+    # print(type(myarray))
+    #print(myarray, end="\n\n")
+    list1=[]
+    list1.append(myarray[0][0].values)
+
+    double_old = []
+    # print(double)
+    for i in myarray:
+        for j in range(len(i)):
+            double_old.append(i[j].values)
+    #print(double_old)
+
+
+
+
+
+    #double_old.append(myarray[i][0].values)
+
+    #print(double_old)
+
+    #得到sequence
+    Suequence=int(list1[0][0])
+
+    return search.capital,double_old,Suequence,list_cangwei
+
+
+
+
+
+
+
+    #发送数据
+def request_final(Suequence,list_buy):
+
+
+    conn2 = grpc.insecure_channel(_HOST + ':' + _PORT)  # 监听频道
+    client = contest_pb2_grpc.ContestStub(channel=conn2)  # 客户端使用Stub类发送请求,参数为频道,为了绑定链接
+
+    #返回list 最终仓位
+
+    SUBMIT = client.submit_answer(contest_pb2.AnswerRequest(user_id = 78,user_pin='IzMTATlK',session_key = 'xkSq7y',sequence=Suequence,positions = list_buy))
+
+    print(SUBMIT)
+    print(SUBMIT.accepted)
+
+
+# 因子1
+def yinzi_one(ku, day, num):
+    output = []
+    for i in range(num):
+        price_today = ku['s{}'.format(i + 1)]['d{}'.format(day + 1)]['price_close']
+        sum = 0
+        for q in range(max(day - 10, 0), day + 1):
+            sum += ku['s{}'.format(i + 1)]['d{}'.format(q + 1)]['price_close']  # 十天均价涨跌因子
+        mean = sum / (day + 1 - max(day - 10, 0)) + 0.001
+        output.append(round(price_today - mean, 3) * (-1))
+    return output
+
+
+def yinzi_two(ku, day, num):  # 振幅因子
+    output = []
+    for i in range(num):
+        output.append((ku['s{}'.format(i + 1)]['d{}'.format(day + 1)]['max'] /
+                       ku['s{}'.format(i + 1)]['d{}'.format(day + 1)]['low']) - 1)
+    return output
+
+
+def yinzi_three(ku, day, num):  # 均价成交因子
+    output = []
+    for a in range(num):
+        junjia = 0
+        chengjiao = 0
+        for b in range(max(day - 30, 0), day + 1):
+            junjia += ku['s{}'.format(a + 1)]['d{}'.format(b + 1)]['price_close'] / (day + 1 - (max(day - 30, 0)))
+            chengjiao += ku['s{}'.format(a + 1)]['d{}'.format(b + 1)]['number']
+            ji = (ku['s{}'.format(a + 1)]['d{}'.format(b + 1)]['number'] + 1) * \
+                 ku['s{}'.format(a + 1)]['d{}'.format(b + 1)]['price_close']
+            output.append(junjia * chengjiao / ji)
+    return output
+
+
+def yinzi_four(ku, day, num):
+    output = []
+    if day <= 1:  # 负跳空因子
+        output = [0.000001] * 482
+    if day > 1:
+        for a in range(num):
+            output.append((-1) * (ku['s{}'.format(a + 1)]['d{}'.format(day)]['price_open'] /
+                                  ku['s{}'.format(a + 1)]['d{}'.format(day - 1)]['price_close'] - 1))
+    return output
+
+
+ #建立库（ku)
+def build(list_allbig):
+    columns = ['days','NO.', 'price_open', 'max', 'low', 'price_close', 'number']
+    # for a in range(3,len(list_allbig)-1):
+    #     if list_allbig[a][0] > list_allbig[a+1][0]:
+    #         num = int(list_allbig[a][0] - list_allbig[a+1][0] + 1)
+    #         break
+    num= int(list_allbig[-1][1]-list_allbig[0][1]+1)
+    day = int(len(list_allbig)/num)
+    list_all = list_allbig
+    ku = {}
+    # for i in range (day):
+    #     list_all.extend(list_allbig[i*num:i*num+num])
+    for a in range(num):
+        ku['s{}'.format(a+1)] = {}
+        for b in range(day):
+            ku['s{}'.format(a+1)]['d{}'.format(b+1)] = {}
+            for c in range(7):
+                ku['s{}'.format(a+1)]['d{}'.format(b+1)][columns[c]] = list_all[b*num+a][c]
+    #print("d{}".format(i+1))
+        #print(ku)
+    #print("-----------------------------------------------------")
+    #print(ku)
+    #print(len(ku))
+    return(ku)
+
+
+#求平均
+
+
+
+#输出一个数用于标准化
+def standard_thin(list):
+    list_s=[]
+    mid = sum(list) / len(list)
+    for num in list:
+        list_s.append((num-mid)**2)
+
+    return (sum(list_s)/len(list_s)) ** 0.5
+
+
+
+#标准化
+
+def standard_list(list):
+    list_s=[]
+    output = []
+    mid = sum(list) / len(list)
+    for num in list:
+        list_s.append((num-mid)**2)
+
+    thin = (sum(list_s)/len(list_s)) ** 0.5
+    for a in list:
+        output.append((a-mid)/(thin+0.001))
+    return output
+
+
+def output(a, b, capital, list2, list3, list5):
+    profit = 0
+    shizhi = 0
+    capital = capital
+    fenmu = sum(map(abs, a))
+    num = len(a)
+    day = len(b['s1'])
+    shizhi_today = 0
+    list1 = []
+    for i in range(num):
+        sin=abs(a[i])/a[i]
+
+        single_abs=min(0.09, abs((a[i] / fenmu)))
+
+        single =single_abs*sin * 0.9 * capital
+
+        list1.append(int(single /
+                         b['s{}'.format(i + 1)]['d{}'.format(day)]['price_close']))
+        # print(list1)
+
+        shizhi_today += int(single)
+        # shizhi_yester=list_yester[i]*ku['s{}'.format(i)]['d{}'.format(day)]['price_close']
+        if day != 1:
+            profit += ((b['s{}'.format(i + 1)]['d{}'.format(day)]['price_close'] -
+                        b['s{}'.format(i + 1)]['d{}'.format(day - 1)]['price_close']) * list2[i]) - single / 10000
+        else:
+            profit += ((b['s{}'.format(i + 1)]['d{}'.format(day)]['price_close'] -
+                        b['s{}'.format(i + 1)]['d{}'.format(day)]['price_open']) * list2[i]) - single / 10000
+    if capital - shizhi <= 0:
+        profit += (capital - shizhi_today) / 250 * 0.03
+    else:
+        profit += (capital - shizhi_today) / 250 * 0.01
+    mount = profit / capital - 0.01 / 250
+
+    capital = capital + profit
+
+    # continue
+
+    list3.append(round(capital, 3))
+    list5.append(mount)
+    # print("今天的仓位=", list1)
+    # print("目前的资金变化",list3)
+    # print("{}%".format(exposure(list1, list2)))
+    print("总资产=", round(capital, 3))
+    return list1, list3, capital, list5
+
+
+if __name__ == '__main__':
+    #run_login()
+
+
+
+    
+    int_x=1
+    day=0
+
+    #初始化
+
+
+    list_capital = []
+    capital = 500000000
+    list_daily = []
+    list_all = []
+
+
+    while int_x==1:
+        #接受数据
+
+        search_capital,list_stock_final,suequence_final,list_getyester=get_data()
+        num=len(list_stock_final)
+
+
+
+
+        #执行并且返回 仓位
+        if day==0:
+            list_yester = [0] * num
+        else:
+            list_yester=list_getyester
+
+        list_all.extend(list_stock_final)
+        #print(list_all)
+
+        print("d{}".format(day + 1))
+        ku = build(list_all)
+
+        # 操作因子
+
+        a1 = yinzi_one(ku, day, num)
+        a2 = yinzi_two(ku, day, num)
+        a3 = yinzi_three(ku, day, num)
+        a4 = yinzi_four(ku, day, num)
+
+        s1 = standard_list(a1)
+        s2 = standard_list(a2)
+        s3 = standard_list(a3)
+        s4 = standard_list(a4)
+
+
+##############     因子汇总
+
+        b1 = []
+        for q in range(len(s1)):
+            b1.append(
+                s1[q] *4
+                + s2[q] * 0.5
+                + s3[q] * 0.5
+                + s4[q] * (-1.5)
+            )
+
+
+
+        #
+        list_buy, list_capital, capital, list_daily = output(b1, ku, search_capital, list_yester, list_capital, list_daily)
+
+
+
+
+        list_final=list_buy
+        #连接并且传送这次仓位
+        request_final(suequence_final,list_final)
+
+
+
+
+        day+=1
+        time.sleep(4.5)
+
