@@ -1,0 +1,575 @@
+#factors_calculation
+
+# !/usr/bin/env python
+# coding:utf-8
+
+import numpy as np
+import logging
+import time
+import pandas as pd
+from scipy.stats import rankdata
+from sklearn import linear_model
+import warnings
+warnings.filterwarnings('ignore')
+
+
+class ArrayManager(object):
+
+    def __init__(self):
+        try:
+            self.load_data()
+        except:
+            self.count = 60
+            self.open = np.zeros((482, 2000))
+            self.high = np.zeros((482, 2000))
+            self.low = np.zeros((482, 2000))
+            self.close = np.zeros((482, 2000))
+            self.volume = np.zeros((482, 2000))
+            self.ret = np.zeros((482, 2000))
+
+    def load_data(self):
+        self.count = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\count.npy")
+        self.open = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\open.npy")
+        self.high = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\high.npy")
+        self.low = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\low.npy")
+        self.close = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\close.npy")
+        self.volume = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\volume.npy")
+        self.ret = np.load(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\ret.npy")
+
+    def del_extreme_value(self, data):
+        pass
+
+    def normalization(self, data):
+        pass
+
+    def update_bar(self, data, sequence):
+        sequence = sequence + 60 - 1
+        self.open[:, sequence] = data[:, 2]
+        self.high[:, sequence] = data[:, 3]
+        self.low[:, sequence] = data[:, 4]
+        self.close[:, sequence] = data[:, 5]
+        self.volume[:, sequence] = data[:, 6]
+        self.ret[:, sequence] = (data[:, 5] / self.close[:, sequence-1]) - 1
+        np.save(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\open.npy", self.open)
+        np.save(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\high.npy", self.high)
+        np.save(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\low.npy", self.low)
+        np.save(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\close.npy", self.close)
+        np.save(r"C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期volume.npy", self.volume)
+
+
+class FactorManager(object):
+
+    def __init__(self):
+        self.am = ArrayManager()
+        self.stk_count = 482
+        self.log = self.log()
+        # self.factor034 = np.zeros((482, 2000))
+        # self.factor034_f = np.zeros(2000)
+        # self.factor035 = np.zeros((482, 2000))
+        # self.factor035_f = np.zeros(2000)
+        # self.factor088 = np.zeros((482, 2000))
+        # self.factor088_f = np.zeros(2000)
+        self.factor002 = np.zeros((482, 2000))
+        self.factor002_f = np.zeros(2000)
+        self.factor003 = np.zeros((482, 2000))
+        self.factor003_f = np.zeros(2000)
+        self.factor006 = np.zeros((482, 2000))
+        self.factor006_f = np.zeros(2000)
+        self.factor008 = np.zeros((482, 2000))
+        self.factor008_f = np.zeros(2000)
+        self.factor009 = np.zeros((482, 2000))
+        self.factor009_f = np.zeros(2000)
+        self.factor010 = np.zeros((482, 2000))
+        self.factor010_f = np.zeros(2000)
+        self.factor012 = np.zeros((482, 2000))
+        self.factor012_f = np.zeros(2000)
+
+        self.factor_ret_Nnum = np.zeros((482, 2000))
+        self.factor_ret_Nnum_f = np.zeros(2000)
+        self.update_factor(60)
+
+    def update_factor(self, sequence):
+        # s_time = time.time()
+        # print("sequence = ", sequence)
+        # 对每一只股票计算因子
+        # for i in range(482):
+        #
+        #     # 第一个因子 std_Nd
+        #     self.factor_ret_Nnum[i, sequence - 1] = self.am.ret[i, (sequence-20):sequence].std()
+        #     self.factor_ret_Nnum[i, sequence-2] = self.am.ret[i, (sequence-21):sequence-1].std()
+        #
+        #     # 第二个因子factor034
+        #     close = self.am.close[i, (sequence - 8): sequence]
+        #     ret = self.am.ret[i, (sequence - 8): sequence]
+        #     factor034 = (self.alpha034(close, ret))
+        #     len_factor034 = len(factor034)
+        #     self.factor034[i, (sequence - len_factor034): sequence] = factor034
+        #
+        #     # 第三个因子factor035
+        #     high = self.am.high[i, (sequence - 40): sequence]
+        #     low = self.am.low[i, (sequence - 40): sequence]
+        #     close = self.am.close[i, (sequence - 40): sequence]
+        #     volume = self.am.volume[i, (sequence - 40): sequence]
+        #     factor035 = self.alpha035(high, low, close, volume)
+        #     len_factor035 = len(factor035)
+        #     self.factor035[i, (sequence - len_factor035): sequence] = factor035
+        #
+        #     # 第四个因子
+        #     volume = self.am.volume[i, (sequence - 80): sequence]
+        #     open_price = self.am.open[i, sequence - 80: sequence]
+        #     high_price = self.am.high[i, sequence - 80: sequence]
+        #     low_price = self.am.low[i, sequence - 80: sequence]
+        #     close_price = self.am.close[i, sequence - 80: sequence]
+        #     factor088 = (self.alpha088(volume, open_price, high_price, low_price, close_price))
+        #     len_factor088 = len(factor088)
+        #     self.factor088[i, (sequence - len_factor088): sequence] = factor088
+
+        # 第一个因子 std_Nd
+
+        # 第一个因子 ret_Nnum 波动率因子
+
+        # 第一个因子ret_Nnum波动率因子
+        self.factor_ret_Nnum[:, sequence-1] = self.am.ret[:, (sequence-20):sequence].std(axis=1)
+        self.factor_ret_Nnum[:, sequence-2] = self.am.ret[:, (sequence-21):sequence-1].std(axis=1)
+
+        # 第二个因子factor009
+        close_price = self.am.close[:, sequence-20: sequence]
+        factor009 = self.alpha009(close_price)
+        row_factor009, col_factor009 = factor009.shape
+        self.factor009[:, (sequence - col_factor009): sequence] = factor009
+
+        # 第三个因子factor002
+        close_price = self.am.close[:, sequence-20: sequence]
+        open_price = self.am.open[:, sequence-20: sequence]
+        volume = self.am.volume[:, sequence-20:sequence]
+        factor002 = self.alpha002(volume, open_price, close_price)
+        row_factor002, col_factor002 = factor009.shape
+        self.factor002[:, (sequence - col_factor002): sequence] = factor002
+
+        # 第四个因子factor003
+        open_price = self.am.open[:, sequence-20: sequence]
+        volume = self.am.volume[:, sequence-20:sequence]
+        factor003 = self.alpha003(open_price, volume)
+        row_factor003, col_factor003 = factor003.shape
+        self.factor003[:, (sequence - col_factor003): sequence] = factor003
+
+        # 第五个因子factor006
+        open_price = self.am.open[:, sequence-20: sequence]
+        volume = self.am.volume[:, sequence-20:sequence]
+        factor006 = self.alpha006(open_price, volume)
+        row_factor006, col_factor006 = factor006.shape
+        self.factor006[:, (sequence - col_factor006): sequence] = factor006
+
+        # 第六个因子factor008
+        open_price = self.am.open[:, sequence-20: sequence]
+        ret = self.am.ret[:, sequence-20: sequence]
+        factor008 = self.alpha008(open_price, ret)
+        row_factor008, col_factor008 = factor008.shape
+        self.factor008[:, (sequence - col_factor008): sequence] = factor008
+
+        # 第七个因子factor010
+        close_price = self.am.close[:, sequence-20: sequence]
+        factor010 = self.alpha010(close_price)
+        row_factor010, col_factor010 = factor010.shape
+        self.factor010[:, (sequence - col_factor010): sequence] = factor010
+
+        # 第八个因子factor012
+        close_price = self.am.close[:, sequence-20: sequence]
+        volume = self.am.volume[:, sequence-20:sequence]
+        factor012 = self.alpha012(close_price, volume)
+        row_factor012, col_factor012 = factor012.shape
+        self.factor012[:, (sequence - col_factor012): sequence] = factor012
+
+        # 第二个因子factor034
+        # close = self.am.close[:, (sequence - 8): sequence]
+        # ret = self.am.ret[:, (sequence - 8): sequence]
+        # factor034 = (self.alpha034(close, ret))
+        # row_factor034, col_factor034 = factor034.shape
+        # self.factor034[:, (sequence - col_factor034): sequence] = factor034
+
+        # 第三个因子factor035
+        # high = self.am.high[:, (sequence - 40): sequence]
+        # low = self.am.low[:, (sequence - 40): sequence]
+        # close = self.am.close[:, (sequence - 40): sequence]
+        # volume = self.am.volume[:, (sequence - 40): sequence]
+        # factor035 = self.alpha035(high, low, close, volume)
+        # row_factor035, col_factor035 = factor035.shape
+        # self.factor035[:, (sequence - col_factor035): sequence] = factor035
+
+        # 第四个因子
+        # volume = self.am.volume[:, (sequence - 80): sequence]
+        # open_price = self.am.open[:, sequence - 80: sequence]
+        # high_price = self.am.high[:, sequence - 80: sequence]
+        # low_price = self.am.low[:, sequence - 80: sequence]
+        # close_price = self.am.close[:, sequence - 80: sequence]
+        # factor088 = (self.alpha088(volume, open_price, high_price, low_price, close_price))
+        # row_factor088, col_factor088 = factor088.shape
+        # self.factor088[:, (sequence - col_factor088): sequence] = factor088
+
+        # e_time = time.time()
+        # print("total_time = ", e_time - s_time)
+        # 计算横截面因子回归系数
+
+        regr = linear_model.LinearRegression()
+
+        ret_temp = self.am.ret[:, sequence-1]
+
+        # factor034_temp = self.factor034[:, sequence-2]
+        # regr.fit(factor034_temp.reshape(-1, 1), ret_temp)
+        # self.factor034_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+        #
+        # factor035_temp = self.factor035[:, sequence-2]
+        # regr.fit(factor035_temp.reshape(-1, 1), ret_temp)
+        # self.factor034_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+        #
+        # factor088_temp = self.factor088[:, sequence-2]
+        # regr.fit(factor088_temp.reshape(-1, 1), ret_temp)
+        # self.factor034_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor_ret_Nnum_temp = self.factor_ret_Nnum[:, sequence-2]
+        regr.fit(factor_ret_Nnum_temp.reshape(-1, 1), ret_temp)
+        self.factor_ret_Nnum_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+
+        factor002_temp = self.factor002[:, sequence-2]
+        regr.fit(factor002_temp.reshape(-1, 1), ret_temp)
+        self.factor002_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor003_temp = self.factor003[:, sequence-2]
+        regr.fit(factor003_temp.reshape(-1, 1), ret_temp)
+        self.factor003_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor006_temp = self.factor006[:, sequence-2]
+        regr.fit(factor006_temp.reshape(-1, 1), ret_temp)
+        self.factor006_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor008_temp = self.factor008[:, sequence-2]
+        regr.fit(factor008_temp.reshape(-1, 1), ret_temp)
+        self.factor008_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor009_temp = self.factor009[:, sequence-2]
+        regr.fit(factor009_temp.reshape(-1, 1), ret_temp)
+        self.factor009_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor010_temp = self.factor010[:, sequence-2]
+        regr.fit(factor010_temp.reshape(-1, 1), ret_temp)
+        self.factor010_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+        factor012_temp = self.factor012[:, sequence-2]
+        regr.fit(factor012_temp.reshape(-1, 1), ret_temp)
+        self.factor012_f[sequence-2] = regr.coef_
+        # print("regr.coef_ = ", regr.coef_)
+
+    def log(self):
+        logger = logging.getLogger('log')
+        logger.setLevel(logging.DEBUG)
+        fh = logging.FileHandler(r'C:\Users\新田草\Desktop\recently\UBIQUANT量化联赛\第四期\log_info_factors_calculation.log')
+        fh.setLevel(logging.DEBUG)
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+        fh.setFormatter(formatter)
+        ch.setFormatter(formatter)
+        logger.addHandler(fh)
+        logger.addHandler(ch)
+        return logger
+
+    # 计算 n 日收益率平均值, 返回股票打分
+    def ret_nd(self, day):
+        # 单因子选股，最近 day(n) 天的收益率平均值(动量类因子, return_nd)
+        if self.am.count < day:
+            self.log.info("return_nd>>当前 bar 个数不足 %d 个, 无法计算该指标" % day)
+            return np.zeros(self.stk_count)
+
+    # 计算 n 日波动率, 返回对应的打分
+    def std_nd(self, day):
+
+        if self.am.count <= day:
+            self.log.info("std_nd>> 数据长度暂不足 %d 个, 该项因子打分全返回 0" % day)
+            return np.zeros(self.stk_count)
+
+        data = self.am.data[-day:]
+        close_price_arr = np.array([x[:, 5] for x in data])
+        return_std = close_price_arr.std(axis=0)
+        sort_index_s2b = np.argsort(return_std)
+
+        score_std_nd = np.zeros(self.stk_count)
+
+        # 排名越高, 分值越大
+        for i in range(10):
+            if i <= 8:
+                for index in sort_index_s2b[50 * i: 50 * (i + 1)]:
+                    score_std_nd[index] = (10 - i)
+            else:
+                for index in sort_index_s2b[9 * 50:]:
+                    score_std_nd[index] = 1
+        return score_std_nd
+
+    def stddev(self, df, window=10):
+        """
+        Wrapper function to estimate rolling standard deviation.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series min over the past 'window' days.
+        """
+        # s_time = time.time()
+        # d = df.rolling(window).std()
+        # e_time = time.time()
+        # print("stddev>>time = ", e_time - s_time)
+        # return d
+        return df.rolling(window, axis=1).std()
+
+    def rank(self, df):
+        """
+        Cross sectional rank
+        :param df: a pandas DataFrame.
+        :return: a pandas DataFrame with rank along columns.
+        """
+        return df.rank(pct=True, axis=1)
+
+    def ts_argmax(self, df, window=10):
+        """
+        Wrapper function to estimate which day ts_max(df, window) occurred on
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: well.. that :)
+        """
+        # s_time = time.time()
+        # d = df.rolling(window).apply(np.argmax) + 1
+        # e_time = time.time()
+        # print("ts_argmax>>time = ", e_time - s_time)
+        # return d
+
+        return df.rolling(window, axis=1).apply(np.argmax) + 1
+
+    def delta(self, df, period=1):
+        """
+        Wrapper function to estimate difference.
+        :param df: a pandas DataFrame.
+        :param period: the difference grade.
+        :return: a pandas DataFrame with today’s value minus the value 'period' days ago.
+        """
+        return df.diff(period, axis=1)
+
+    def rolling_rank(self, na):
+        """
+        Auxiliary function to be used in pd.rolling_apply
+        :param na: numpy array.
+        :return: The rank of the last value in the array.
+        """
+        # print(na)
+        return rankdata(na)[-1]
+
+    def ts_rank(self, df, window=10):
+        """
+        Wrapper function to estimate rolling rank.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series rank over the past window days.
+        """
+        # print("df = ", df)
+        # s_time = time.time()
+        # d = df.rolling(window).apply(self.rolling_rank, raw=False)
+        # print(d)
+        # time.sleep(100)
+        # e_time = time.time()
+        # print("ts_rank>>time = ", e_time - s_time)
+        # return d
+        return df.rolling(window, axis=1).apply(self.rolling_rank, raw=False)
+
+    def sma(self, df, window=10):
+        """
+        Wrapper function to estimate SMA.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series min over the past 'window' days.
+        """
+        # s_time = time.time()
+        # d = df.rolling(window).mean()
+        # e_time = time.time()
+        # print("sma>>time = ", e_time - s_time)
+        # return d
+
+        return df.rolling(window, axis=1).mean()
+
+    def decay_linear(self, df, period=10):
+        """
+        Linear weighted moving average implementation.
+        :param df: a pandas DataFrame.
+        :param period: the LWMA period
+        :return: a pandas DataFrame with the LWMA.
+        """
+        # Clean data
+        if df.isnull().values.any():
+            df.fillna(method='ffill', inplace=True)
+            df.fillna(method='bfill', inplace=True)
+            df.fillna(value=0, inplace=True)
+        na_lwma = np.zeros_like(df)
+        na_lwma[:period, :] = df.iloc[:period, :]
+        na_series = df.values
+
+        divisor = period * (period + 1) / 2
+        y = (np.arange(period) + 1) * 1.0 / divisor
+        # Estimate the actual lwma with the actual close.
+        # The backtest engine should assure to be snooping bias free.
+        for row in range(period - 1, df.shape[0]):
+            x = na_series[row - period + 1: row + 1, :]
+            na_lwma[row, :] = (np.dot(x.T, y))
+        return pd.DataFrame(na_lwma, index=df.index, columns=['CLOSE'])
+
+    def correlation(self, x, y, window=10):
+        """
+        Wrapper function to estimate rolling corelations.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series min over the past 'window' days.
+        """
+        # s_time = time.time()
+        # d = x.rolling(window).corr(y)
+        # e_time = time.time()
+        # print("correlation>>time = ", e_time - s_time)
+        # return d
+
+        return x.rolling(window, axis=1).corr(y)
+
+    def ts_min(self, df, window=10):
+        """
+        Wrapper function to estimate rolling min.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series min over the past 'window' days.
+        """
+        return df.rolling(window).min()
+
+    def ts_max(self, df, window=10):
+        """
+        Wrapper function to estimate rolling min.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series max over the past 'window' days.
+        """
+        return df.rolling(window).max()
+
+    # region Auxiliary functions
+    def ts_sum(self, df, window=10):
+        """
+        Wrapper function to estimate rolling sum.
+        :param df: a pandas DataFrame.
+        :param window: the rolling window.
+        :return: a pandas DataFrame with the time-series min over the past 'window' days.
+        """
+
+        return df.rolling(window).sum()
+
+    def delay(self, df, period=1):
+        """
+        Wrapper function to estimate lag.
+        :param df: a pandas DataFrame.
+        :param period: the lag grade.
+        :return: a pandas DataFrame with lagged time series
+        """
+        return df.shift(period)
+
+    # Alpha#2	 (-1 * correlation(rank(delta(log(volume), 2)), rank(((close - open) / open)), 6))
+    def alpha002(self, volume, open_price, close_price):
+        volume = pd.DataFrame(volume)
+        open_price = pd.DataFrame(open_price)
+        close_price = pd.DataFrame(close_price)
+        df = -1 * self.correlation(self.rank(self.delta(np.log(volume), 2)), self.rank((close_price - open_price) / open_price), 6)
+        return df.replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#3	 (-1 * correlation(rank(open), rank(volume), 10))
+    def alpha003(self, open_price, volume):
+        open_price = pd.DataFrame(open_price)
+        volume = pd.DataFrame(volume)
+        df = -1 * self.correlation(self.rank(open_price), self.rank(volume), 10)
+        return df.replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#6	 (-1 * correlation(open, volume, 10))
+    def alpha006(self, open_price, volume):
+        open_price = pd.DataFrame(open_price)
+        volume = pd.DataFrame(volume)
+        df = -1 * self.correlation(open_price, volume, 10)
+        return df.replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#8	 (-1 * rank(((sum(open, 5) * sum(returns, 5)) - delay((sum(open, 5) * sum(returns, 5)),10))))
+    def alpha008(self, open_price, ret):
+        open_price = pd.DataFrame(open_price)
+        ret = pd.DataFrame(ret)
+        return (-1 * (self.rank(((self.ts_sum(open_price, 5) * self.ts_sum(ret, 5)) -
+                           self.delay((self.ts_sum(open_price, 5) * self.ts_sum(ret, 5)), 10))))).replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#9	 ((0 < ts_min(delta(close, 1), 5)) ? delta(close, 1) : ((ts_max(delta(close, 1), 5) < 0) ?delta(close, 1) : (-1 * delta(close, 1))))
+    def alpha009(self, close_price):
+        close_price = pd.DataFrame(close_price)
+        delta_close = self.delta(close_price, 1)
+        cond_1 = self.ts_min(delta_close, 5) > 0
+        cond_2 = self.ts_max(delta_close, 5) < 0
+        alpha = -1 * delta_close
+        alpha[cond_1 | cond_2] = delta_close
+        return alpha.replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#10	 rank(((0 < ts_min(delta(close, 1), 4)) ? delta(close, 1) : ((ts_max(delta(close, 1), 4) < 0)? delta(close, 1) : (-1 * delta(close, 1)))))
+    def alpha010(self, close_price):
+        close_price = pd.DataFrame(close_price)
+        delta_close = self.delta(close_price, 1)
+        cond_1 = self.ts_min(delta_close, 4) > 0
+        cond_2 = self.ts_max(delta_close, 4) < 0
+        alpha = -1 * delta_close
+        alpha[cond_1 | cond_2] = delta_close
+        return alpha.replace([-np.inf, np.inf], 0).fillna(value=0)
+
+    # Alpha#12	 (sign(delta(volume, 1)) * (-1 * delta(close, 1)))
+    def alpha012(self, close_price, volume):
+        close_price = pd.DataFrame(close_price)
+        volume = pd.DataFrame(volume)
+        return np.sign(self.delta(volume, 1)) * (-1 * self.delta(close_price, 1))
+
+    # Alpha#34	 rank(((1 - rank((stddev(returns, 2) / stddev(returns, 5)))) + (1 - rank(delta(close, 1)))))
+    def alpha034(self, close, ret):
+        close = pd.DataFrame(close)
+        ret = pd.DataFrame(ret)
+        inner = self.stddev(ret, 2) / self.stddev(ret, 5)
+        inner = inner.replace([-np.inf, np.inf], 1).fillna(value=1)
+        return (self.rank(2 - self.rank(inner) - self.rank(self.delta(close, 1)))).values
+
+    # Alpha#35	 ((Ts_Rank(volume, 32) * (1 - Ts_Rank(((close + high) - low), 16))) * (1 -Ts_Rank(returns, 32)))
+    def alpha035(self, high, low, close, volume):
+        volume = pd.DataFrame(volume)
+        close = pd.DataFrame(close)
+        ret = (close - close.shift(1)) / close.shift(1)
+        low = pd.DataFrame(low)
+        high = pd.DataFrame(high)
+        x1 = self.ts_rank(volume, 32)
+        x2 = (1 - self.ts_rank(close + high - low, 16))
+        x3 = (1 - self.ts_rank(ret, 32))
+        return (((x1*x2) * x3).replace([-np.inf, np.inf], 1)).fillna(value=1).values
+
+    # Alpha#88	 min(rank(decay_linear(((rank(open) + rank(low)) - (rank(high) + rank(close))),8.06882)), Ts_Rank(decay_linear(correlation(Ts_Rank(close, 8.44728), Ts_Rank(adv60,20.6966), 8.01266), 6.65053), 2.61957))
+    def alpha088(self, volume, open_price, high_price, low_price, close_price):
+        volume = pd.DataFrame(volume)
+        open_price = pd.DataFrame(open_price)
+        high_price = pd.DataFrame(high_price)
+        low_price = pd.DataFrame(low_price)
+        close_price = pd.DataFrame(close_price)
+        adv60 = self.sma(volume, 60)
+        p1 = self.rank(self.decay_linear(((self.rank(open_price) + self.rank(low_price)) - (self.rank(high_price) + self.rank(close_price))),
+                                         8).CLOSE)
+        p2 = self.ts_rank(self.decay_linear(self.correlation(self.ts_rank(close_price, 8), self.ts_rank(adv60, 21), 8), 7).CLOSE, 3)
+        df = pd.DataFrame({'p1': p1, 'p2': p2})
+        df.at[df['p1'] >= df['p2'], 'min'] = df['p2']
+        df.at[df['p2'] >= df['p1'], 'min'] = df['p1']
+        return df['min'].values
+        # return min(rank(decay_linear(((rank(self.open) + rank(self.low)) - (rank(self.high) + rank(self.close))).to_frame(),8).CLOSE), ts_rank(decay_linear(correlation(ts_rank(self.close, 8), ts_rank(adv60,20.6966), 8).to_frame(), 7).CLOSE, 3))
+
+
