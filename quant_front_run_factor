@@ -1,0 +1,217 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jul 29 14:21:28 2020
+
+@author: zhuhy
+"""
+
+import pandas as pd
+import numpy as np
+import datetime
+import cx_Oracle as orcl
+
+
+##############################设置参数######################################
+Start_Date = "2010-01-01"
+End_Date =  "2020-07-01"
+data_standardization_period = 20
+data_window_period = datetime.timedelta(days=30)
+
+
+##############################获取数据###################################### 
+
+#获取全部数据起始日
+Start_Date1 = Start_Date[0:4] + Start_Date[5:7] + Start_Date[8:10]#用于sql
+
+#获取全部数据终止日
+End_Date1 = End_Date[0:4] + End_Date[5:7] + End_Date[8:10]#用于sql
+
+#从本地数据库中获取数据
+con_wind=orcl.connect("suntime/suntime@172.16.2.89:1521/quantdb")
+
+#获取所有交易日数据
+sql = "select distinct trade_days, to_date(trade_days,'YYYYMMDD') from WINDQ.ASHARECALENDAR where trade_days between " + Start_Date1 +  " and " + End_Date1 + " order by trade_days"
+data = pd.read_sql(sql,con_wind)
+
+Trading_Day = []
+
+for i in range(len(data)):
+    Trading_Day.append(data["TO_DATE(TRADE_DAYS,'YYYYMMDD')"][i].date())
+
+#获取每月最后一个交易日数据
+Trading_Day_Month = []
+for i in range(len(Trading_Day) - 1):
+    month1 = Trading_Day[i].strftime("%Y-%m-%d")[5:7]
+    month2 = Trading_Day[i+1].strftime("%Y-%m-%d")[5:7]
+    if month1 != month2:
+        Trading_Day_Month.append(Trading_Day[i])
+
+#获取日度价格数据
+sql = "select distinct S_INFO_WINDCODE, TRADE_DT, S_DQ_PCTCHANGE from WINDQ.ASHAREEODPRICES where TRADE_DT between " + Start_Date1 +  " and " + End_Date1 + " order by TRADE_DT"
+data = pd.read_sql(sql,con_wind)
+
+price_data = data
+
+#获取转换格式后的交易日数列
+Trading_Day_Convert = []
+
+for i in range(len(Trading_Day)):
+    Trading_Date = Trading_Day[i].strftime("%Y-%m-%d")
+    Trading_Date_Convert = Trading_Date[0:4] + Trading_Date[5:7] + Trading_Date[8:10]
+    Trading_Day_Convert.append(Trading_Date_Convert)
+    
+#获取换手率数据
+sql = "select S_INFO_WINDCODE, TRADE_DT, TURNOVER_D_FLOAT from WINDQ.ASHAREYIELD where TRADE_DT between " + Start_Date1 +  " and " + End_Date1 + " order by TRADE_DT"
+data = pd.read_sql(sql,con_wind)
+
+turn_over_data = data
+
+#日度价格、换手率数据处理
+turn_over_data = turn_over_data.dropna()
+data_all = pd.merge(price_data, turn_over_data, how = 'inner')
+data_all = data_all[data_all["TURNOVER_D_FLOAT"] > 0]
+
+
+##############################计算因子值######################################
+
+#标准化换手率和涨跌幅
+def data_standardization(data_all):
+    
+    data_all_standardization = pd.DataFrame(columns = ["S_INFO_WINDCODE", "TRADE_DT", "STD_S_DQ_PCTCHANGE", "STD_TURNOVER_D_FLOAT"])
+    
+    for i in range(len(Factor_Trading_Day)):
+        current_time = Factor_Trading_Day[i]
+        print(current_time)
+        current_time_convert = Factor_Trading_Day_Convert[i]
+        trade_date_list = find_trade_date_list(current_time, data_standardization_period)
+        data_all_period_initial = data_all[data_all["TRADE_DT"].isin(trade_date_list)]
+        
+        #去除每一期价格数据在标准化过程中不足20日的股票
+        data_all_period = delete_invalid_data(data_all_period_initial)
+    
+        data_all_period = data_all_period.groupby(by=["S_INFO_WINDCODE"]).mean()
+        data_all_period["TRADE_DT"] = current_time_convert
+        data_all_period.reset_index(drop = False, inplace = True)
+        data_all_period.rename(columns={"S_DQ_PCTCHANGE": "AVG_S_DQ_PCTCHANGE"}, inplace = True)
+        data_all_period.rename(columns={"TURNOVER_D_FLOAT": "AVG_TURNOVER_D_FLOAT"}, inplace = True)
+        data_all_period.sort_values(by=["S_INFO_WINDCODE"], inplace=True)
+        data_all_period_cal = pd.merge(data_all_period_initial, data_all_period, how = 'inner')
+        data_all_period_cal["STD_S_DQ_PCTCHANGE"] = data_all_period_cal.S_DQ_PCTCHANGE - data_all_period_cal.AVG_S_DQ_PCTCHANGE
+        data_all_period_cal["STD_TURNOVER_D_FLOAT"] = data_all_period_cal.TURNOVER_D_FLOAT - data_all_period_cal.AVG_TURNOVER_D_FLOAT
+        data_all_standardization = pd.concat([data_all_standardization, data_all_period_cal])
+        
+    return data_all_standardization
+        
+#获取过去20个交易日的日期序列    
+def find_trade_date_list(current_time, data_standardization_period):
+    count = 0
+    for i in range(len(Trading_Day)):
+        if current_time != Trading_Day[i]:
+            count = count + 1
+        else:
+            break
+    
+    trade_date_list = Trading_Day_Convert[count - data_standardization_period: count]
+    
+    return trade_date_list        
+    
+#去除每一期价格数据中不足20日的股票
+def delete_invalid_data(data_all_period):
+    ticker_series = data_all_period["S_INFO_WINDCODE"].drop_duplicates()
+    ticker_list = ticker_series.tolist()
+    ticker_list_new = []
+    
+    for i in range(len(ticker_list)):
+#        print(i)
+#        print(len(ticker_list))
+        ticker = ticker_list[i]
+        price_data_period_ticker = data_all_period[data_all_period["S_INFO_WINDCODE"].isin([ticker])]
+        
+        if len(price_data_period_ticker["S_INFO_WINDCODE"].tolist()) >= data_standardization_period:
+            ticker_list_new.append(ticker)
+    
+    data_all_period_new = data_all_period[data_all_period["S_INFO_WINDCODE"].isin(ticker_list_new)]
+
+    return data_all_period_new
+
+#计算因子值
+def calculate_factor(current_time):
+   
+    calendar_date_list = find_calendar_date_list(current_time, data_window_period)
+    data_all_standardization_period = data_all_standardization[data_all_standardization["TRADE_DT"].isin(calendar_date_list)]
+    
+    ticker_series = data_all_standardization_period["S_INFO_WINDCODE"].drop_duplicates()
+    ticker_list = ticker_series.tolist()
+    
+    data_corr_period = pd.DataFrame(columns = ["ticker", "front_run"])
+    
+    for i in range(len(ticker_list)):
+        print(ticker_list[i])
+        data_all_standardization_period_ticker = data_all_standardization_period[data_all_standardization_period["S_INFO_WINDCODE"] == ticker_list[i]]
+        data_all_standardization_period_ticker.sort_values(by=["TRADE_DT"], inplace=True)
+        #换手率向下移动一行，对应T+1日的涨幅
+        data_all_standardization_period_ticker["STD_TURNOVER_D_FLOAT_YESTERDAY"] = data_all_standardization_period_ticker["STD_TURNOVER_D_FLOAT"].shift(axis = 0, period = 1)
+        data_all_standardization_period_ticker = data_all_standardization_period_ticker.dropna()
+        corr_ticker = data_all_standardization_period_ticker["STD_S_DQ_PCTCHANGE"].corr(data_all_standardization_period_ticker["STD_TURNOVER_D_FLOAT_YESTERDAY"])
+        series = {"ticker": ticker_list[i], "front_run": corr_ticker}
+        data_corr_period = data_corr_period.append(series, ignore_index = True)
+    
+    return data_corr_period
+    
+#获取过去1个月的日期序列    
+def find_calendar_date_list(current_time, data_window_period):
+    start_time = current_time - data_window_period
+    start_count = 0
+    for i in range(len(Trading_Day)):
+        if start_time >= Trading_Day[i]:
+            start_count = start_count + 1
+        else:
+            break    
+    
+    end_count = 0
+    for i in range(len(Trading_Day)):
+        if current_time != Trading_Day[i]:
+            end_count = end_count + 1
+        else:
+            break
+    
+    calendar_date_list = Trading_Day_Convert[start_count - 1: end_count]
+    
+    return calendar_date_list    
+   
+
+
+##############################生成因子值######################################
+
+Factor_Trading_Day = Trading_Day[20:-1]
+Factor_Trading_Day_Convert = Trading_Day_Convert[20:-1]
+Factor_Trading_Day_Month = Trading_Day_Month[2:-1]
+
+#日度价格、换手率数据标准化
+data_all_standardization = data_standardization(data_all)
+
+#生成因子值
+fnlist = pd.DataFrame(columns = ['filename', 'date', 'dummy'])
+
+for i in range(len(Factor_Trading_Day_Month)):
+    
+    print(Factor_Trading_Day_Month[i])
+    
+    data_corr_period = calculate_factor(Factor_Trading_Day_Month[i])
+    Factor_Trading_Day_Month_Convert = Factor_Trading_Day_Month[i].strftime('%Y-%m-%d')
+    filename = "front_run_" + Factor_Trading_Day_Month_Convert[0:4] + Factor_Trading_Day_Month_Convert[5:7] + Factor_Trading_Day_Month_Convert[8:10]
+    data_corr_period.to_csv("D:\\daily_factor\\front_run\\" + filename + ".csv", index = None)
+    
+    filename_csv = filename + ".csv"
+    date_csv = Factor_Trading_Day_Month_Convert[0:4] + Factor_Trading_Day_Month_Convert[5:7] + Factor_Trading_Day_Month_Convert[8:10]
+    series = {'filename':filename_csv, 'date':date_csv}
+    fnlist = fnlist.append(series, ignore_index = True)
+
+
+
+##############################输出文件#####################################    
+fnlist.to_csv("D:\\daily_factor\\front_run\\" + "front_run_fnlist" + ".csv", index = None)
+    
+    
+    
+    
